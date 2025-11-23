@@ -111,4 +111,5 @@ See the `bladeExample` folder for sample input files that work with this script.
 ## 🙏 Credits
 
 Original script by Jan Mrázek (2021)  
-Updated for QBlade CE v2.x compatibility (2025)
+Updated for QBlade CE v2.x compatibility (2025)  
+Fixes and improvements by [Fysik Klubben](https://www.instagram.com/fysik_klubben/)
