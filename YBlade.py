@@ -361,37 +361,6 @@ def run(context):
                         leftInfillRail.add(Point3D.create(lp[0], lp[1], b.pos))
                         rp = getRightmostPoint(points)
                         rightInfillRail.add(Point3D.create(rp[0], rp[1], b.pos))
-                    
-                    # Add a small tip cap profile if tip rounding is enabled
-                    if params.get("tipFillet", 0) > 0:
-                        lastBlade = blade[profileIndices[-1]]
-                        tipOffset = params["tipFillet"] * 0.3  # Small distance above tip
-                        tipScale = 0.1  # Scale tip profile down to 10% for rounding
-                        
-                        planeInput = planes.createInput()
-                        offsetValue = adsk.core.ValueInput.createByReal(lastBlade.pos + tipOffset)
-                        planeInput.setByOffset(xyPlane, offsetValue)
-                        plane = planes.add(planeInput)
-                        plane.name = "tip_cap"
-                        tipSketch = sketches.add(plane)
-                        tipSketch.isLightBulbOn = False
-                        
-                        # Draw small profile at tip
-                        spline = drawProfile(tipSketch, profileData, lastBlade.len * tipScale, 
-                                           lastBlade.twist, lastBlade.thread, lastBlade.offset)
-                        lines = drawProfileLines(tipSketch, reducedProfileData, lastBlade.len * tipScale,
-                                                lastBlade.twist, lastBlade.thread, lastBlade.offset)
-                        dirPoint = adsk.core.Point3D.create(0, 0, 0)
-                        offsetCurves = tipSketch.offset(lines, dirPoint, params["thickness"])
-                        profiles.append(tipSketch)
-                        profileIndices.append(len(blade))  # Dummy index
-                        
-                        # Add to rails
-                        points = collectLinePoints(offsetCurves)
-                        lp = getLeftmostPoint(points)
-                        leftInfillRail.add(Point3D.create(lp[0], lp[1], lastBlade.pos + tipOffset))
-                        rp = getRightmostPoint(points)
-                        rightInfillRail.add(Point3D.create(rp[0], rp[1], lastBlade.pos + tipOffset))
 
                     guideSketch = sketches.add(xyPlane)
                     # Use only the blade sections that have profiles
@@ -437,7 +406,6 @@ def run(context):
                     inputs.addStringValueInput("bladeFile", "Blade file path", qbladeFile)
                     inputs.addDistanceValueCommandInput("thickness", "Shell thickness", adsk.core.ValueInput.createByString("1mm"))
                     inputs.addValueInput("simplificationFactor", "Infill simplification factor", "", adsk.core.ValueInput.createByReal(0.005))
-                    inputs.addDistanceValueCommandInput("tipFillet", "Tip fillet radius (0 = none)", adsk.core.ValueInput.createByString("2mm"))
                 except:
                     if ui:
                         ui.messageBox("Failed:\n{}".format(traceback.format_exc()))
