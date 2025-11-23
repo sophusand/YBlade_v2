@@ -13,6 +13,7 @@ constructs them as solid 3D bodies:
   - **Inner infill**: Simplified internal structure (for hollow blades)
 - Automatic profile detection and filtering
 - Smart handling of multi-profile blades
+- **Optional tip fillet**: Automatically rounds blade tip for improved aerodynamics
 
 ## 📋 Supported QBlade Versions
 
@@ -63,6 +64,7 @@ In QBlade, you need to export two files:
 8. Adjust parameters if needed:
    - **Shell thickness**: Wall thickness for hollow blade (default: 1mm)
    - **Infill simplification**: Higher = simpler infill geometry (default: 0.005)
+   - **Tip fillet radius**: Rounds the blade tip for better aerodynamics (default: 2mm, set to 0 to disable)
 9. Click **OK** and wait for generation to complete
 
 ### Step 3: Result
@@ -107,6 +109,8 @@ See the `bladeExample` folder for sample input files that work with this script.
 2. **Avoid extreme twists**: Very high twist angles (>60°) near transitions may cause issues
 3. **Check your exports**: Verify files open correctly in a text editor before importing
 4. **Start simple**: Test with example files first to understand the workflow
+5. **Use tip fillet**: A 2-3mm fillet on the blade tip significantly improves aerodynamic performance and reduces tip vortex noise
+6. **Adjust fillet for blade size**: Larger blades (>0.5m) can use 3-5mm, smaller blades work well with 1-2mm
 
 ## 🙏 Credits
 

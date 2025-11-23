@@ -376,6 +376,34 @@ def run(context):
                     hollowBladeAlt(rootComp, profiles, [innerGuide1, innerGuide2])
                     extrudeBlade(rootComp, profiles, sweepLine, guideLine1)
                     
+                    # Add fillet to blade tip for better aerodynamics if enabled
+                    if params.get("tipFillet", 0) > 0:
+                        try:
+                            # Find the outer shell body (first body created)
+                            if rootComp.bRepBodies.count > 0:
+                                shellBody = rootComp.bRepBodies.item(rootComp.bRepBodies.count - 1)
+                                # Collect edges at the tip (highest Z position)
+                                tipEdges = adsk.core.ObjectCollection.create()
+                                maxZ = blade[-1].pos
+                                
+                                for edge in shellBody.edges:
+                                    # Check if edge is near the tip
+                                    midPoint = edge.pointOnEdge
+                                    if abs(midPoint.z - maxZ) < 0.1:  # Within 1mm of tip
+                                        tipEdges.add(edge)
+                                
+                                if tipEdges.count > 0:
+                                    fillets = rootComp.features.filletFeatures
+                                    filletInput = fillets.createInput()
+                                    filletInput.addConstantRadiusEdgeSet(tipEdges, 
+                                        adsk.core.ValueInput.createByReal(params["tipFillet"]), True)
+                                    filletInput.isG2 = False
+                                    filletInput.isRollingBallCorner = True
+                                    fillets.add(filletInput)
+                        except:
+                            # If fillet fails, continue without it
+                            pass
+                    
                     adsk.terminate()
                 except:
                     if ui:
@@ -406,6 +434,7 @@ def run(context):
                     inputs.addStringValueInput("bladeFile", "Blade file path", qbladeFile)
                     inputs.addDistanceValueCommandInput("thickness", "Shell thickness", adsk.core.ValueInput.createByString("1mm"))
                     inputs.addValueInput("simplificationFactor", "Infill simplification factor", "", adsk.core.ValueInput.createByReal(0.005))
+                    inputs.addDistanceValueCommandInput("tipFillet", "Tip fillet radius (0 = none)", adsk.core.ValueInput.createByString("2mm"))
                 except:
                     if ui:
                         ui.messageBox("Failed:\n{}".format(traceback.format_exc()))
