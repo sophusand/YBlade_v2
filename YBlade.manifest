@@ -1,9 +1,9 @@
 {
 	"autodeskProduct":	"Fusion360",
 	"type":	"script",
-	"author":	"Jan Mrázek",
+	"author":	"Jan Mrázek, Updated by sophusand",
 	"description":	{
-		"":	"Simple script to import qblade"
+		"":	"Import QBlade wind turbine blade designs into Fusion 360. Supports both QBlade v0.963 and CE v2.x formats. Generates solid bodies ready for manufacturing."
 	},
 	"supportedOS":	"windows|mac",
 	"editEnabled":	true

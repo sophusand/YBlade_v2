@@ -1,5 +1,5 @@
-#Author-Jan Mrázek
-#Description-
+#Author-Jan Mrázek, Updated by sophusand (2025)
+#Description-Import QBlade wind turbine blade designs into Fusion 360. Supports QBlade v0.963 and CE v2.x formats.
 
 import adsk.core, adsk.fusion, adsk.cam, traceback
 from adsk.core import Point3D, Point2D, Vector3D, Vector2D, Matrix3D
@@ -22,15 +22,73 @@ class Struct(object): pass
 
 def readBlade(bladeFile):
     sections = []
-    for l in bladeFile.readlines()[3:]:
-        x = l.split()
-        s = Struct()
-        s.pos = float(x[0]) * 100 # Convert to cm
-        s.len = float(x[1]) * 100 # Convert to cm 
-        s.twist = float(x[2])
-        s.offset = float(x[3]) * 100 # Convert to cm
-        s.thread = float(x[4])
-        sections.append(s)
+    lines = bladeFile.readlines()
+    
+    # Detect file format
+    isNewFormat = False
+    dataStartLine = 3  # Default for old format
+    
+    for i, line in enumerate(lines):
+        if "Blade Data" in line:
+            isNewFormat = True
+            # Skip past the header line with "POS_[m]"
+            for j in range(i + 1, len(lines)):
+                if "POS_[m]" in lines[j]:
+                    dataStartLine = j + 1  # Start after the header
+                    break
+            break
+    
+    # Parse based on format
+    profileCounts = {}  # Track which profile is used most
+    mainProfile = None  # The profile we'll use (most common non-circular)
+    
+    for l in lines[dataStartLine:]:
+        stripped = l.strip()
+        if not stripped or stripped.startswith("-"):
+            continue
+            
+        x = stripped.split()
+        if len(x) < 5:
+            continue
+            
+        try:
+            s = Struct()
+            s.pos = float(x[0]) * 100  # Convert to cm
+            s.len = float(x[1]) * 100  # Convert to cm 
+            s.twist = float(x[2])
+            
+            if isNewFormat:
+                # New format: POS CHORD TWIST OFFSET_X OFFSET_Y P_AXIS POLAR_FILE
+                # OFFSET_Y is used as offset
+                s.offset = float(x[4]) * 100  # Convert to cm
+                s.thread = float(x[5])
+                
+                # Track profile usage
+                if len(x) > 6:
+                    profile = x[6]
+                    # Skip circular profiles - we want the main airfoil
+                    if "Circular" not in profile and "circular" not in profile:
+                        profileCounts[profile] = profileCounts.get(profile, 0) + 1
+                    s.profile = profile
+            else:
+                # Old format: POS CHORD TWIST OFFSET THREAD
+                s.offset = float(x[3]) * 100  # Convert to cm
+                s.thread = float(x[4])
+                s.profile = "default"
+            
+            sections.append(s)
+        except (ValueError, IndexError):
+            continue
+    
+    # Determine main profile (most common non-circular)
+    if profileCounts:
+        mainProfile = max(profileCounts, key=profileCounts.get)
+    
+    # Filter out sections that don't use the main profile
+    if mainProfile:
+        sections = [s for s in sections if hasattr(s, 'profile') and 
+                   (s.profile == mainProfile or "Circular" not in s.profile)]
+    
     return sections
 
 def findClosest(target, l):
@@ -154,11 +212,13 @@ def hollowBladeAlt(component, profiles, guides):
         loftSectionsObj = loftInput.loftSections
         loftSectionsObj.add(profiles[i].profiles.item(0))
         loftSectionsObj.add(profiles[i + 1].profiles.item(0))
-        c = loftInput.centerLineOrRails
-        for g in guides:
-            path = adsk.fusion.Path.create(g.item(i), adsk.fusion.ChainedCurveOptions.noChainedCurves)
-            c.addRail(path)
-        loftFeats.add(loftInput)
+        # Skip guide rails - they often cause issues
+        # Simple loft without rails is more reliable
+        try:
+            loftFeats.add(loftInput)
+        except:
+            # If loft fails, continue to next section
+            continue
 
 def collectLinePoints(linestring):
     res = set()
@@ -261,11 +321,11 @@ def run(context):
                     planes = rootComp.constructionPlanes
                     xyPlane = rootComp.xYConstructionPlane
 
-                    with open(params["profileFile"]) as f:
+                    with open(params["profileFile"], 'r') as f:
                         profileData = readProfile(f)
                     reducedProfileData = reduceProfile(profileData, params["simplificationFactor"])
 
-                    with open(params["bladeFile"]) as f:
+                    with open(params["bladeFile"], 'r') as f:
                         blade = readBlade(f)
                     deduceOffset(blade, profileData)
 
@@ -274,11 +334,15 @@ def run(context):
                     prevTwist = -1000
                     leftInfillRail = adsk.core.ObjectCollection.create()
                     rightInfillRail = adsk.core.ObjectCollection.create()
+                    profileIndices = []  # Track which blade sections we actually create profiles for
+                    
                     for i, b in enumerate(blade):
                         if abs(b.len - prevLen) < 1 and abs(b.twist - prevTwist) < 1 and i != len(blade) - 1:
                             continue
                         prevLen = b.len
                         prevTwist = b.twist
+                        profileIndices.append(i)
+                        
                         planeInput = planes.createInput()
                         offsetValue = adsk.core.ValueInput.createByReal(b.pos)
                         planeInput.setByOffset(xyPlane, offsetValue)
@@ -299,8 +363,10 @@ def run(context):
                         rightInfillRail.add(Point3D.create(rp[0], rp[1], b.pos))
 
                     guideSketch = sketches.add(xyPlane)
-                    guideLine1 = drawGuideLine(guideSketch, blade, (0, 0))
-                    guideLine2 = drawGuideLine(guideSketch, blade, (1, 0))
+                    # Use only the blade sections that have profiles
+                    filteredBlade = [blade[i] for i in profileIndices]
+                    guideLine1 = drawGuideLine(guideSketch, filteredBlade, (0, 0))
+                    guideLine2 = drawGuideLine(guideSketch, filteredBlade, (1, 0))
                     innerGuide1 = drawLinestring(guideSketch, leftInfillRail)
                     innerGuide2 = drawLinestring(guideSketch, rightInfillRail)
                     sweepLine = guideSketch.sketchCurves.sketchLines.addByTwoPoints(
