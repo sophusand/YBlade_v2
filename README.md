@@ -3,7 +3,7 @@
 Script for Fusion 360 that imports [QBlade](https://www.q-blade.org/) blade designs and
 constructs them as solid 3D bodies:
 
-![result.png](result.png)
+![Blade Import Demo](Blade%20importing.gif)
 
 ## ✨ Features
 
