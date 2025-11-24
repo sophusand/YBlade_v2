@@ -349,12 +349,16 @@ def run(context):
                         plane = planes.add(planeInput)
                         plane.name = f"profile_{i}"
                         profileSketch = sketches.add(plane)
-                        profileSketch.isLightBulbOn = False
+                        profileSketch.isLightBulbOn = True  # Keep sketches visible
                         spline = drawProfile(profileSketch, profileData, b.len, b.twist, b.thread, b.offset)
                         lines = drawProfileLines(profileSketch, reducedProfileData, b.len, b.twist, b.thread, b.offset)
                         dirPoint = adsk.core.Point3D.create(0, 0, 0)
                         offsetCurves = profileSketch.offset(lines, dirPoint, params["thickness"])
                         profiles.append(profileSketch)
+                        
+                        # Force viewport update to show progress
+                        adsk.doEvents()
+                        app.activeViewport.refresh()
 
                         points = collectLinePoints(offsetCurves)
                         lp = getLeftmostPoint(points)
@@ -375,6 +379,10 @@ def run(context):
 
                     hollowBladeAlt(rootComp, profiles, [innerGuide1, innerGuide2])
                     extrudeBlade(rootComp, profiles, sweepLine, guideLine1)
+                    
+                    # Hide all sketches when done
+                    for sketch in sketches:
+                        sketch.isLightBulbOn = False
                     
                     adsk.terminate()
                 except:
