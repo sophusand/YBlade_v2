@@ -317,17 +317,42 @@ def run(context):
                     inputs = command.commandInputs
                     params = {input.id: input.value for input in inputs}
                     
+                    # Create progress dialog
+                    progressDialog = ui.createProgressDialog()
+                    progressDialog.cancelButtonText = 'Cancel'
+                    progressDialog.isBackgroundTranslucent = False
+                    progressDialog.isCancelButtonShown = False
+                    progressDialog.show('QBlade Import', 'Reading files...', 0, 10)
+                    
                     sketches = rootComp.sketches
                     planes = rootComp.constructionPlanes
                     xyPlane = rootComp.xYConstructionPlane
 
                     with open(params["profileFile"], 'r') as f:
                         profileData = readProfile(f)
-                    reducedProfileData = reduceProfile(profileData, params["simplificationFactor"])
+                    reducedProfileData = reduceProfile(profileData, 0.005)  # Use fixed simplification
 
+                    progressDialog.progressValue = 1
+                    progressDialog.message = 'Processing blade sections...'
+                    
                     with open(params["bladeFile"], 'r') as f:
                         blade = readBlade(f)
                     deduceOffset(blade, profileData)
+                    
+                    # Apply hub radius offset if requested
+                    if params.get("removeHubRadius", False):
+                        # Find minimum Z position (hub radius)
+                        hubOffset = min([b.pos for b in blade])
+                        # Subtract hub offset from all positions so blade starts at Z=0
+                        for b in blade:
+                            b.pos -= hubOffset
+                    
+                    progressDialog.progressValue = 2
+                    progressDialog.message = f'Creating {len(blade)} blade profiles...'
+                    
+                    # Start timeline group for QBlade import
+                    timelineGroups = design.timeline.timelineGroups
+                    groupStartIndex = design.timeline.markerPosition
 
                     profiles = []
                     prevLen = -1000
@@ -343,28 +368,33 @@ def run(context):
                         prevTwist = b.twist
                         profileIndices.append(i)
                         
+                        # Update progress every 5 profiles (less frequently for speed)
+                        if len(profiles) % 5 == 0:
+                            progress = 2 + int((i / len(blade)) * 5)
+                            progressDialog.progressValue = progress
+                            progressDialog.message = f'Creating profiles... {len(profiles)}/{len(blade)}'
+                        
                         planeInput = planes.createInput()
                         offsetValue = adsk.core.ValueInput.createByReal(b.pos)
                         planeInput.setByOffset(xyPlane, offsetValue)
                         plane = planes.add(planeInput)
                         plane.name = f"profile_{i}"
                         profileSketch = sketches.add(plane)
-                        profileSketch.isLightBulbOn = True  # Keep sketches visible
+                        profileSketch.isLightBulbOn = False  # Hide sketches during creation for speed
                         spline = drawProfile(profileSketch, profileData, b.len, b.twist, b.thread, b.offset)
                         lines = drawProfileLines(profileSketch, reducedProfileData, b.len, b.twist, b.thread, b.offset)
                         dirPoint = adsk.core.Point3D.create(0, 0, 0)
                         offsetCurves = profileSketch.offset(lines, dirPoint, params["thickness"])
                         profiles.append(profileSketch)
-                        
-                        # Force viewport update to show progress
-                        adsk.doEvents()
-                        app.activeViewport.refresh()
 
                         points = collectLinePoints(offsetCurves)
                         lp = getLeftmostPoint(points)
                         leftInfillRail.add(Point3D.create(lp[0], lp[1], b.pos))
                         rp = getRightmostPoint(points)
                         rightInfillRail.add(Point3D.create(rp[0], rp[1], b.pos))
+                    
+                    progressDialog.progressValue = 7
+                    progressDialog.message = 'Building blade shell...'
 
                     guideSketch = sketches.add(xyPlane)
                     # Use only the blade sections that have profiles
@@ -377,17 +407,36 @@ def run(context):
                         Point3D.create(0, 0, blade[0].pos),
                         Point3D.create(0, 0, blade[-1].pos))
 
+                    progressDialog.progressValue = 8
+                    progressDialog.message = 'Creating infill structure...'
+                    
                     hollowBladeAlt(rootComp, profiles, [innerGuide1, innerGuide2])
+                    
+                    progressDialog.progressValue = 9
+                    progressDialog.message = 'Finalizing blade...'
+                    
                     extrudeBlade(rootComp, profiles, sweepLine, guideLine1)
+                    
+                    # Create timeline group for all blade operations
+                    groupEndIndex = design.timeline.markerPosition - 1
+                    if groupEndIndex >= groupStartIndex:
+                        bladeGroup = timelineGroups.add(groupStartIndex, groupEndIndex)
+                        bladeGroup.name = "QBlade Import"
+                    
+                    progressDialog.progressValue = 10
+                    progressDialog.message = 'Complete!'
                     
                     # Hide all sketches when done
                     for sketch in sketches:
                         sketch.isLightBulbOn = False
                     
+                    progressDialog.hide()
                     adsk.terminate()
-                except:
+                except Exception as e:
+                    if 'progressDialog' in locals():
+                        progressDialog.hide()
                     if ui:
-                        ui.messageBox("Failed:\n{}".format(traceback.format_exc()))
+                        ui.messageBox(f"Import failed:\n\n{str(e)}")
 
         class YBladeDestroyHandler(adsk.core.CommandEventHandler):
             def __init__(self):
@@ -410,10 +459,10 @@ def run(context):
                     handlers.append(onDestroy)
 
                     inputs = cmd.commandInputs
-                    inputs.addStringValueInput("profileFile", "Profile file path", profileFile)
-                    inputs.addStringValueInput("bladeFile", "Blade file path", qbladeFile)
-                    inputs.addDistanceValueCommandInput("thickness", "Shell thickness", adsk.core.ValueInput.createByString("1mm"))
-                    inputs.addValueInput("simplificationFactor", "Infill simplification factor", "", adsk.core.ValueInput.createByReal(0.005))
+                    inputs.addStringValueInput("profileFile", "Airfoil file (.afl)", profileFile)
+                    inputs.addStringValueInput("bladeFile", "Blade file (.bld)", qbladeFile)
+                    inputs.addDistanceValueCommandInput("thickness", "Wall thickness", adsk.core.ValueInput.createByString("2mm"))
+                    inputs.addBoolValueInput("removeHubRadius", "Start blade at Z=0", True, "", True)
                 except:
                     if ui:
                         ui.messageBox("Failed:\n{}".format(traceback.format_exc()))
