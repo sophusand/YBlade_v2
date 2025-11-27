@@ -330,7 +330,7 @@ def run(context):
 
                     with open(params["profileFile"], 'r') as f:
                         profileData = readProfile(f)
-                    reducedProfileData = reduceProfile(profileData, 0.005)  # Use fixed simplification
+                    reducedProfileData = reduceProfile(profileData, 0.002)  # Balance between smoothness and performance
 
                     progressDialog.progressValue = 1
                     progressDialog.message = 'Processing blade sections...'
@@ -410,6 +410,9 @@ def run(context):
                     progressDialog.progressValue = 8
                     progressDialog.message = 'Creating infill structure...'
                     
+                    # Remember body count before creating blade bodies
+                    bodyCountBefore = rootComp.bRepBodies.count
+                    
                     hollowBladeAlt(rootComp, profiles, [innerGuide1, innerGuide2])
                     
                     progressDialog.progressValue = 9
@@ -424,6 +427,58 @@ def run(context):
                         bladeGroup.name = "QBlade Import"
                     
                     progressDialog.progressValue = 10
+                    progressDialog.message = 'Complete!'
+                    
+                    # Center blade by center of mass if requested (do this AFTER timeline grouping)
+                    if params.get("centerMass", False):
+                        progressDialog.message = 'Centering blade by center of mass...'
+                        
+                        # Get all bodies that were created by this script
+                        allBodies = rootComp.bRepBodies
+                        bodyCountAfter = allBodies.count
+                        
+                        if bodyCountAfter > bodyCountBefore:
+                            # Collect the newly created bodies
+                            newBodies = []
+                            for i in range(bodyCountBefore, bodyCountAfter):
+                                newBodies.append(allBodies.item(i))
+                            
+                            # Calculate combined center of mass and find bounds
+                            totalMass = 0.0
+                            weightedComX = 0.0
+                            weightedComY = 0.0
+                            minZ = float('inf')
+                            
+                            for body in newBodies:
+                                props = body.physicalProperties
+                                mass = props.mass
+                                com = props.centerOfMass
+                                
+                                totalMass += mass
+                                weightedComX += com.x * mass
+                                weightedComY += com.y * mass
+                                
+                                bbox = body.boundingBox
+                                if bbox.minPoint.z < minZ:
+                                    minZ = bbox.minPoint.z
+                            
+                            # Calculate average center of mass
+                            if totalMass > 0:
+                                comX = weightedComX / totalMass
+                                comY = weightedComY / totalMass
+                                
+                                # Create move transformation
+                                moveFeats = rootComp.features.moveFeatures
+                                bodiesToMove = adsk.core.ObjectCollection.create()
+                                for body in newBodies:
+                                    bodiesToMove.add(body)
+                                
+                                # Move to center X,Y and bottom at Z=0
+                                transform = adsk.core.Matrix3D.create()
+                                transform.translation = adsk.core.Vector3D.create(-comX, -comY, -minZ)
+                                
+                                moveInput = moveFeats.createInput(bodiesToMove, transform)
+                                moveFeats.add(moveInput)
                     progressDialog.message = 'Complete!'
                     
                     # Hide all sketches when done
@@ -463,6 +518,7 @@ def run(context):
                     inputs.addStringValueInput("bladeFile", "Blade file (.bld)", qbladeFile)
                     inputs.addDistanceValueCommandInput("thickness", "Wall thickness", adsk.core.ValueInput.createByString("2mm"))
                     inputs.addBoolValueInput("removeHubRadius", "Start blade at Z=0", True, "", True)
+                    inputs.addBoolValueInput("centerMass", "Center by center of mass (X=0, Y=0)", True, "", False)
                 except:
                     if ui:
                         ui.messageBox("Failed:\n{}".format(traceback.format_exc()))
