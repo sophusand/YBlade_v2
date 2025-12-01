@@ -388,39 +388,31 @@ def run(context):
                         ui.messageBox(f"Import failed:\n\n{str(e)}")
 
         class YBladeInputChangedHandler(adsk.core.InputChangedEventHandler):
-            def __init__(self, ui, design, root_comp):
+            def __init__(self):
                 super().__init__()
-                self._ui = ui
-                self._design = design
-                self._root_comp = root_comp
 
             def notify(self, args):
                 try:
-                    command = args.firingEvent.sender
-                    inputs = command.commandInputs
                     changed = args.input
+                    inputs = args.inputs
 
                     if changed.id == 'profileBrowse':
-                        file_path = open_file_dialog(self._ui, 'Select airfoil file', '*.afl')
+                        file_path = open_file_dialog(ui, 'Select airfoil file', '*.afl')
                         if file_path:
                             inputs.itemById('profilePath').value = file_path
                             append_status(inputs, f'Airfoil selected: {os.path.basename(file_path)}')
                         changed.value = False
 
                     elif changed.id == 'bladeBrowse':
-                        file_path = open_file_dialog(self._ui, 'Select blade file', '*.bld')
+                        file_path = open_file_dialog(ui, 'Select blade file', '*.bld')
                         if file_path:
                             inputs.itemById('bladePath').value = file_path
                             append_status(inputs, f'Blade file selected: {os.path.basename(file_path)}')
                         changed.value = False
 
-                    elif changed.id == 'profilePath':
-                        profile_path = changed.value.strip()
-                        if profile_path:
-                            append_status(inputs, f'Airfoil path set to: {profile_path}')
-
                 except Exception as err:
-                    append_status(command.commandInputs, f'Input update failed: {err}')
+                    if ui:
+                        ui.messageBox(f'Browse failed: {err}')
 
         class YBladeDestroyHandler(adsk.core.CommandEventHandler):
             def __init__(self):
@@ -438,9 +430,12 @@ def run(context):
                     cmd.execute.add(onExecute)
                     onDestroy = YBladeDestroyHandler()
                     cmd.destroy.add(onDestroy)
+                    onInputChanged = YBladeInputChangedHandler()
+                    cmd.inputChanged.add(onInputChanged)
                     # keep the handler referenced beyond this function
                     handlers.append(onExecute)
                     handlers.append(onDestroy)
+                    handlers.append(onInputChanged)
 
                     inputs = cmd.commandInputs
 
@@ -459,10 +454,6 @@ def run(context):
 
                     statusBox = inputs.addTextBoxCommandInput('statusLog', 'Status', 'Ready', 6, True)
                     statusBox.isFullWidth = True
-
-                    onInputChanged = YBladeInputChangedHandler(ui, design, rootComp)
-                    cmd.inputChanged.add(onInputChanged)
-                    handlers.append(onInputChanged)
                 except:
                     if ui:
                         ui.messageBox("Failed:\n{}".format(traceback.format_exc()))
