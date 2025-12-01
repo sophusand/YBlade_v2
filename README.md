@@ -7,12 +7,12 @@ constructs them as solid 3D bodies:
 
 ## ✨ Features
 
-- Imports QBlade blade designs directly into Fusion 360
-- Generates two solid bodies:
-  - **Outer shell**: Smooth swept surface (ready for manufacturing)
-  - **Inner infill**: Simplified internal structure (for hollow blades)
-- Automatic profile detection and filtering
-- Smart handling of multi-profile blades
+- Imports QBlade blade designs directly into Fusion 360 as a single clean solid body
+- Automatically detects and uses the dominant airfoil profile in multi-profile blades
+- Optional **Start blade at Z=0** toggle removes the hub offset before modelling
+- Optional **Center mass to origin** toggle repositions the resulting body using its center of mass
+- Built-in status log keeps you updated on every step of the import
+- Adds a toolbar button (Solid workspace → Add-Ins panel) for one-click access with a custom icon
 
 ## 📋 Supported QBlade Versions
 
@@ -60,18 +60,14 @@ In QBlade, you need to export two files:
 5. A dialog will appear - click **OK**
 6. Select your **blade definition file** (`.bld` or `.txt`)
 7. Select your **airfoil profile file** (`.afl` or `.txt`)
-8. Adjust parameters if needed:
-   - **Shell thickness**: Wall thickness for hollow blade (default: 1mm)
-   - **Infill simplification**: Higher = simpler infill geometry (default: 0.005)
-9. Click **OK** and wait for generation to complete
+8. Optionally toggle:
+   - **Start blade at Z=0** to subtract the hub radius so the blade begins at Z = 0 cm
+   - **Center mass to origin** to move the finished body so its COM sits at (0,0,0) and the root touches Z = 0
+9. Click **OK** and watch the status log for progress updates while the solid is generated
 
 ### Step 3: Result
 
-Two bodies will be created:
-- **Body 1**: Outer shell (smooth swept surface)
-- **Body 2**: Inner infill (simplified internal structure)
-
-You can now use Combine operations to subtract the infill from the shell for a hollow blade.
+One solid body will be created, following the blade's sweep path and twist profile. You can continue modelling, add mounting hardware, or export it straight to CAM.
 
 ## 📁 Example Files
 
@@ -107,6 +103,10 @@ See the `bladeExample` folder for sample input files that work with this script.
 2. **Avoid extreme twists**: Very high twist angles (>60°) near transitions may cause issues
 3. **Check your exports**: Verify files open correctly in a text editor before importing
 4. **Start simple**: Test with example files first to understand the workflow
+
+## 📦 Recent Updates
+
+- **2025-12-01**: Solid-only workflow, status logging, toolbar button, hub-offset removal, center-of-mass positioning. Removed preview sketch option due to reliability issues in Fusion.
 
 ## 🙏 Credits
 

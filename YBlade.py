@@ -2,20 +2,59 @@
 #Description-Import QBlade wind turbine blade designs into Fusion 360. Supports QBlade v0.963 and CE v2.x formats.
 
 import adsk.core, adsk.fusion, adsk.cam, traceback
-from adsk.core import Point3D, Point2D, Vector3D, Vector2D, Matrix3D
+from adsk.core import Point3D, Vector3D, Matrix3D
 import math
 import sys 
-from copy import deepcopy
+import os
 
 handlers = []
 sys.stderr = sys.stdout
 sys.stdout.flush()
 
-def readProfile(profileFile):
+profile_cache = {}
+
+
+def append_status(inputs, message):
+    status_box = inputs.itemById('statusLog')
+    if not status_box:
+        return
+    current = status_box.text.strip()
+    status_box.text = (current + '\n' + message).strip() if current else message
+
+
+def open_file_dialog(ui, title, file_filter='*.*'):
+    file_dlg = ui.createFileDialog()
+    file_dlg.isMultiSelectEnabled = False
+    file_dlg.title = title
+    file_dlg.filter = file_filter
+    if file_dlg.showOpen() == adsk.core.DialogResults.DialogOK:
+        return file_dlg.filenames[0]
+    return None
+
+
+def loadProfile(profilePath):
+    cached = profile_cache.get(profilePath)
+    if cached:
+        return cached
+
     points = []
-    for l in profileFile.readlines()[1:]:
-        p = l.split()
-        points.append((float(p[0]), float(p[1])))
+    try:
+        with open(profilePath, 'r') as profileFile:
+            for l in profileFile.readlines()[1:]:
+                tokens = l.split()
+                if len(tokens) < 2:
+                    continue
+                try:
+                    points.append((float(tokens[0]), float(tokens[1])))
+                except ValueError:
+                    continue
+    except OSError as err:
+        raise RuntimeError(f'Failed to read airfoil file: {err}')
+
+    if not points:
+        raise RuntimeError('Airfoil file contained no coordinate data.')
+
+    profile_cache[profilePath] = points
     return points
 
 class Struct(object): pass
@@ -114,14 +153,6 @@ def deduceOffset(blade, profile):
     for b in blade:
         b.offset = -mid * b.len
 
-def offsetLen(blade, offsetMm):
-    newBlade = []
-    for x in blade:
-        y = deepcopy(x)
-        y.len -= 2 * offsetMm / 10
-        newBlade.append(y)
-    return newBlade
-
 def profilePoints(profileData, chordLength, twist, threadAxisOffset, zoffset):
     pointSet = adsk.core.ObjectCollection.create()
     for profilePoint in profileData:
@@ -143,16 +174,6 @@ def drawProfile(sketch, profileData, chordLength, twist, threadAxisOffset, zoffs
     profile.add(line)
     return profile
 
-def drawProfileLines(sketch, profileData, chordLength, twist, threadAxisOffset, zoffset):
-    pointSet = profilePoints(profileData, chordLength, twist, threadAxisOffset, zoffset)
-    lineProfile = adsk.core.ObjectCollection.create()
-    for i in range(pointSet.count):
-        first, last = pointSet.item(i), pointSet.item((i + 1) % pointSet.count)
-        line = sketch.sketchCurves.sketchLines.addByTwoPoints(first, last)
-        line.isConstruction = True
-        lineProfile.add(line)
-    return lineProfile
-
 def drawGuideLine(sketch, blade, seed):
     pointSet = adsk.core.ObjectCollection.create() 
     for s in blade:
@@ -169,18 +190,19 @@ def drawSpline(sketch, points):
     spline = sketch.sketchCurves.sketchFittedSplines.add(points)
     return adsk.fusion.Path.create(spline, adsk.fusion.ChainedCurveOptions.noChainedCurves)
 
-def drawLinestring(sketch, points):
-    line = adsk.core.ObjectCollection.create() 
-    for i in range(points.count - 1):
-        s, e = points.item(i), points.item((i + 1) % points.count)
-        l = sketch.sketchCurves.sketchLines.addByTwoPoints(s, e)
-        line.add(l)
-    return line
-
 def extrudeBlade(component, profiles, sweepLine, guideLine):
+    if not profiles:
+        raise RuntimeError('Cannot sweep blade without profile sketches.')
+
     sweepProfile = adsk.core.ObjectCollection.create()
-    sweepProfile.add(profiles[0].profiles.item(0))
-    sweepProfile.add(profiles[0].profiles.item(1))
+    firstSketchProfiles = profiles[0].profiles
+    if firstSketchProfiles.count == 0:
+        raise RuntimeError('The first profile sketch contains no closed profiles.')
+
+    # Always sweep the outer profile; include inner profile if present (legacy hollow design)
+    sweepProfile.add(firstSketchProfiles.item(0))
+    if firstSketchProfiles.count > 1:
+        sweepProfile.add(firstSketchProfiles.item(1))
 
     path = component.features.createPath(sweepLine)
     guide = component.features.createPath(guideLine)
@@ -190,110 +212,6 @@ def extrudeBlade(component, profiles, sweepLine, guideLine):
     sweepInput.guideRail = guide
     sweepInput.profileScaling = adsk.fusion.SweepProfileScalingOptions.SweepProfileScaleOption
     sweeps.add(sweepInput)
-
-def hollowBlade(component, profiles, guides):
-    loftFeats = component.features.loftFeatures
-    loftInput = loftFeats.createInput(adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
-    loftSectionsObj = loftInput.loftSections
-    for p in profiles:
-        loftSectionsObj.add(p.profiles.item(0))
-    c = loftInput.centerLineOrRails
-    for g in guides:
-        c.addRail(g)
-    loftFeats.add(loftInput)
-
-def hollowBladeAlt(component, profiles, guides):
-    loftFeats = component.features.loftFeatures
-    for i in range(len(profiles) - 1):
-        op = adsk.fusion.FeatureOperations.JoinFeatureOperation
-        if i == 0:
-            op = adsk.fusion.FeatureOperations.NewBodyFeatureOperation
-        loftInput = loftFeats.createInput(op)
-        loftSectionsObj = loftInput.loftSections
-        loftSectionsObj.add(profiles[i].profiles.item(0))
-        loftSectionsObj.add(profiles[i + 1].profiles.item(0))
-        # Skip guide rails - they often cause issues
-        # Simple loft without rails is more reliable
-        try:
-            loftFeats.add(loftInput)
-        except:
-            # If loft fails, continue to next section
-            continue
-
-def collectLinePoints(linestring):
-    res = set()
-    for i in range(linestring.count):
-        l = linestring.item(i)
-        s, e = l.geometry.startPoint, l.geometry.endPoint
-        res.add((s.x, s.y))
-        res.add((e.x, e.y))
-    return list(res)
-
-def getLeftmostPoint(points):
-    res = points[0]
-    for p in points:
-        if p[0] < res[0]:
-            res = p
-    return res
-
-def getRightmostPoint(points):
-    res = points[0]
-    for p in points:
-        if p[0] > res[0]:
-            res = p
-    return res
-
-def dist(a, b):
-    x = a[0] - b[0]
-    y = a[1] - b[1]
-    return math.sqrt(x*x + y*y)
-
-def _vec2d_dist(p1, p2):
-    return (p1[0] - p2[0])**2 + (p1[1] - p2[1])**2
-
-def _vec2d_sub(p1, p2):
-    return (p1[0]-p2[0], p1[1]-p2[1])
-
-
-def _vec2d_mult(p1, p2):
-    return p1[0]*p2[0] + p1[1]*p2[1]
-
-# Taken from https://stackoverflow.com/questions/2573997/reduce-number-of-points-in-line
-def ramerdouglas(line, dist):
-    if len(line) < 3:
-        return line
-
-    (begin, end) = (line[0], line[-1]) if line[0] != line[-1] else (line[0], line[-2])
-
-    distSq = []
-    for curr in line[1:-1]:
-        tmp = (
-            _vec2d_dist(begin, curr) - _vec2d_mult(_vec2d_sub(end, begin), _vec2d_sub(curr, begin)) ** 2 / _vec2d_dist(begin, end))
-        distSq.append(tmp)
-
-    maxdist = max(distSq)
-    if maxdist < dist ** 2:
-        return [begin, end]
-
-    pos = distSq.index(maxdist)
-    return (ramerdouglas(line[:pos + 2], dist) + 
-            ramerdouglas(line[pos + 1:], dist)[1:])
-
-def reduceProfile(profile, minDistance):
-    return ramerdouglas(profile, minDistance)
-
-def inputFile(ui, title):
-    fileDlg = ui.createFileDialog()
-    fileDlg.isMultiSelectEnabled = False
-    fileDlg.title = title
-    fileDlg.filter = "*.*"
-    
-    # Show file open dialog
-    dlgResult = fileDlg.showOpen()
-    if dlgResult == adsk.core.DialogResults.DialogOK:
-        return fileDlg.filenames[0]
-    else:
-        raise RuntimeError("No file specified")      
 
 def run(context):
     ui = None
@@ -305,8 +223,8 @@ def run(context):
         design = app.activeProduct
         rootComp = design.activeComponent 
 
-        qbladeFile = inputFile(ui, "Select QBlade specification file")
-        profileFile = inputFile(ui, "Select profile file")
+        defaultBladePath = ''
+        defaultProfilePath = ''
 
         class YBladeExecuteHandler(adsk.core.CommandEventHandler):
             def __init__(self):
@@ -315,183 +233,194 @@ def run(context):
                 try:
                     command = args.firingEvent.sender
                     inputs = command.commandInputs
-                    params = {input.id: input.value for input in inputs}
-                    
-                    # Create progress dialog
+                    profile_path = inputs.itemById('profilePath').value.strip()
+                    blade_path = inputs.itemById('bladePath').value.strip()
+                    remove_hub = inputs.itemById('removeHubRadius').value
+                    center_mass = inputs.itemById('centerMass').value
+                    append_status(inputs, 'Starting import...')
+
+                    if not profile_path or not blade_path:
+                        raise RuntimeError('Select both airfoil and blade files before running the import.')
+
                     progressDialog = ui.createProgressDialog()
                     progressDialog.cancelButtonText = 'Cancel'
                     progressDialog.isBackgroundTranslucent = False
                     progressDialog.isCancelButtonShown = False
                     progressDialog.show('QBlade Import', 'Reading files...', 0, 10)
-                    
+
                     sketches = rootComp.sketches
                     planes = rootComp.constructionPlanes
                     xyPlane = rootComp.xYConstructionPlane
 
-                    with open(params["profileFile"], 'r') as f:
-                        profileData = readProfile(f)
-                    reducedProfileData = reduceProfile(profileData, 0.002)  # Balance between smoothness and performance
+                    profileData = loadProfile(profile_path)
+                    append_status(inputs, f'Airfoil loaded ({len(profileData)} points).')
 
                     progressDialog.progressValue = 1
                     progressDialog.message = 'Processing blade sections...'
-                    
-                    with open(params["bladeFile"], 'r') as f:
-                        blade = readBlade(f)
+
+                    try:
+                        with open(blade_path, 'r') as f:
+                            blade = readBlade(f)
+                    except OSError as err:
+                        raise RuntimeError(f'Failed to read blade file: {err}')
+
+                    append_status(inputs, f'Blade definition loaded ({len(blade)} sections).')
                     deduceOffset(blade, profileData)
-                    
-                    # Apply hub radius offset if requested
-                    if params.get("removeHubRadius", False):
-                        # Find minimum Z position (hub radius)
+
+                    if remove_hub:
                         hubOffset = min([b.pos for b in blade])
-                        # Subtract hub offset from all positions so blade starts at Z=0
                         for b in blade:
                             b.pos -= hubOffset
-                    
+                        append_status(inputs, f'Hub offset removed ({hubOffset:.2f} cm).')
+
                     progressDialog.progressValue = 2
                     progressDialog.message = f'Creating {len(blade)} blade profiles...'
-                    
-                    # Start timeline group for QBlade import
+
                     timelineGroups = design.timeline.timelineGroups
                     groupStartIndex = design.timeline.markerPosition
 
                     profiles = []
                     prevLen = -1000
                     prevTwist = -1000
-                    leftInfillRail = adsk.core.ObjectCollection.create()
-                    rightInfillRail = adsk.core.ObjectCollection.create()
-                    profileIndices = []  # Track which blade sections we actually create profiles for
-                    
+                    successfulBladeData = []
+
                     for i, b in enumerate(blade):
                         if abs(b.len - prevLen) < 1 and abs(b.twist - prevTwist) < 1 and i != len(blade) - 1:
                             continue
                         prevLen = b.len
                         prevTwist = b.twist
-                        profileIndices.append(i)
-                        
-                        # Update progress every 5 profiles (less frequently for speed)
+
                         if len(profiles) % 5 == 0:
-                            progress = 2 + int((i / len(blade)) * 5)
+                            progress = 2 + int((i / max(1, len(blade))) * 5)
                             progressDialog.progressValue = progress
                             progressDialog.message = f'Creating profiles... {len(profiles)}/{len(blade)}'
-                        
+
                         planeInput = planes.createInput()
                         offsetValue = adsk.core.ValueInput.createByReal(b.pos)
                         planeInput.setByOffset(xyPlane, offsetValue)
                         plane = planes.add(planeInput)
                         plane.name = f"profile_{i}"
                         profileSketch = sketches.add(plane)
-                        profileSketch.isLightBulbOn = False  # Hide sketches during creation for speed
-                        spline = drawProfile(profileSketch, profileData, b.len, b.twist, b.thread, b.offset)
-                        lines = drawProfileLines(profileSketch, reducedProfileData, b.len, b.twist, b.thread, b.offset)
-                        dirPoint = adsk.core.Point3D.create(0, 0, 0)
-                        offsetCurves = profileSketch.offset(lines, dirPoint, params["thickness"])
-                        profiles.append(profileSketch)
+                        profileSketch.isLightBulbOn = False
+                        drawProfile(profileSketch, profileData, b.len, b.twist, b.thread, b.offset)
 
-                        points = collectLinePoints(offsetCurves)
-                        lp = getLeftmostPoint(points)
-                        leftInfillRail.add(Point3D.create(lp[0], lp[1], b.pos))
-                        rp = getRightmostPoint(points)
-                        rightInfillRail.add(Point3D.create(rp[0], rp[1], b.pos))
-                    
+                        profiles.append(profileSketch)
+                        successfulBladeData.append(b)
+
+                    if not profiles:
+                        raise RuntimeError('No valid blade sections were generated. Check the QBlade and airfoil files.')
+                    if len(successfulBladeData) < 2:
+                        raise RuntimeError('At least two blade sections are required to build the blade.')
+
                     progressDialog.progressValue = 7
                     progressDialog.message = 'Building blade shell...'
 
                     guideSketch = sketches.add(xyPlane)
-                    # Use only the blade sections that have profiles
-                    filteredBlade = [blade[i] for i in profileIndices]
-                    guideLine1 = drawGuideLine(guideSketch, filteredBlade, (0, 0))
-                    guideLine2 = drawGuideLine(guideSketch, filteredBlade, (1, 0))
-                    innerGuide1 = drawLinestring(guideSketch, leftInfillRail)
-                    innerGuide2 = drawLinestring(guideSketch, rightInfillRail)
+                    guideLine1 = drawGuideLine(guideSketch, successfulBladeData, (0, 0))
                     sweepLine = guideSketch.sketchCurves.sketchLines.addByTwoPoints(
                         Point3D.create(0, 0, blade[0].pos),
                         Point3D.create(0, 0, blade[-1].pos))
 
                     progressDialog.progressValue = 8
-                    progressDialog.message = 'Creating infill structure...'
-                    
-                    # Remember body count before creating blade bodies
+                    progressDialog.message = 'Building blade...'
+
                     bodyCountBefore = rootComp.bRepBodies.count
-                    
-                    hollowBladeAlt(rootComp, profiles, [innerGuide1, innerGuide2])
-                    
+
                     progressDialog.progressValue = 9
                     progressDialog.message = 'Finalizing blade...'
-                    
+
                     extrudeBlade(rootComp, profiles, sweepLine, guideLine1)
-                    
-                    # Create timeline group for all blade operations
+
                     groupEndIndex = design.timeline.markerPosition - 1
                     if groupEndIndex >= groupStartIndex:
                         bladeGroup = timelineGroups.add(groupStartIndex, groupEndIndex)
                         bladeGroup.name = "QBlade Import"
-                    
+
+                    allBodies = rootComp.bRepBodies
+                    bodyCountAfter = allBodies.count
+                    newBodies = []
+                    if bodyCountAfter > bodyCountBefore:
+                        for i in range(bodyCountBefore, bodyCountAfter):
+                            newBodies.append(allBodies.item(i))
+
+                    if center_mass and newBodies:
+                        progressDialog.message = 'Centering blade by center of mass...'
+                        totalMass = 0.0
+                        weightedComX = 0.0
+                        weightedComY = 0.0
+                        minZ = float('inf')
+                        for body in newBodies:
+                            props = body.physicalProperties
+                            mass = props.mass
+                            com = props.centerOfMass
+                            totalMass += mass
+                            weightedComX += com.x * mass
+                            weightedComY += com.y * mass
+                            bbox = body.boundingBox
+                            if bbox.minPoint.z < minZ:
+                                minZ = bbox.minPoint.z
+
+                        if totalMass > 0:
+                            comX = weightedComX / totalMass
+                            comY = weightedComY / totalMass
+                            moveFeats = rootComp.features.moveFeatures
+                            bodiesToMove = adsk.core.ObjectCollection.create()
+                            for body in newBodies:
+                                bodiesToMove.add(body)
+                            transform = adsk.core.Matrix3D.create()
+                            transform.translation = adsk.core.Vector3D.create(-comX, -comY, -minZ)
+                            moveInput = moveFeats.createInput(bodiesToMove, transform)
+                            moveFeats.add(moveInput)
+
                     progressDialog.progressValue = 10
                     progressDialog.message = 'Complete!'
-                    
-                    # Center blade by center of mass if requested (do this AFTER timeline grouping)
-                    if params.get("centerMass", False):
-                        progressDialog.message = 'Centering blade by center of mass...'
-                        
-                        # Get all bodies that were created by this script
-                        allBodies = rootComp.bRepBodies
-                        bodyCountAfter = allBodies.count
-                        
-                        if bodyCountAfter > bodyCountBefore:
-                            # Collect the newly created bodies
-                            newBodies = []
-                            for i in range(bodyCountBefore, bodyCountAfter):
-                                newBodies.append(allBodies.item(i))
-                            
-                            # Calculate combined center of mass and find bounds
-                            totalMass = 0.0
-                            weightedComX = 0.0
-                            weightedComY = 0.0
-                            minZ = float('inf')
-                            
-                            for body in newBodies:
-                                props = body.physicalProperties
-                                mass = props.mass
-                                com = props.centerOfMass
-                                
-                                totalMass += mass
-                                weightedComX += com.x * mass
-                                weightedComY += com.y * mass
-                                
-                                bbox = body.boundingBox
-                                if bbox.minPoint.z < minZ:
-                                    minZ = bbox.minPoint.z
-                            
-                            # Calculate average center of mass
-                            if totalMass > 0:
-                                comX = weightedComX / totalMass
-                                comY = weightedComY / totalMass
-                                
-                                # Create move transformation
-                                moveFeats = rootComp.features.moveFeatures
-                                bodiesToMove = adsk.core.ObjectCollection.create()
-                                for body in newBodies:
-                                    bodiesToMove.add(body)
-                                
-                                # Move to center X,Y and bottom at Z=0
-                                transform = adsk.core.Matrix3D.create()
-                                transform.translation = adsk.core.Vector3D.create(-comX, -comY, -minZ)
-                                
-                                moveInput = moveFeats.createInput(bodiesToMove, transform)
-                                moveFeats.add(moveInput)
-                    progressDialog.message = 'Complete!'
-                    
-                    # Hide all sketches when done
+                    append_status(inputs, 'Import complete.')
+
                     for sketch in sketches:
                         sketch.isLightBulbOn = False
-                    
+
                     progressDialog.hide()
-                    adsk.terminate()
                 except Exception as e:
                     if 'progressDialog' in locals():
                         progressDialog.hide()
+                    append_status(command.commandInputs, f'Error: {e}')
                     if ui:
                         ui.messageBox(f"Import failed:\n\n{str(e)}")
+
+        class YBladeInputChangedHandler(adsk.core.InputChangedEventHandler):
+            def __init__(self, ui, design, root_comp):
+                super().__init__()
+                self._ui = ui
+                self._design = design
+                self._root_comp = root_comp
+
+            def notify(self, args):
+                try:
+                    command = args.firingEvent.sender
+                    inputs = command.commandInputs
+                    changed = args.input
+
+                    if changed.id == 'profileBrowse':
+                        file_path = open_file_dialog(self._ui, 'Select airfoil file', '*.afl')
+                        if file_path:
+                            inputs.itemById('profilePath').value = file_path
+                            append_status(inputs, f'Airfoil selected: {os.path.basename(file_path)}')
+                        changed.value = False
+
+                    elif changed.id == 'bladeBrowse':
+                        file_path = open_file_dialog(self._ui, 'Select blade file', '*.bld')
+                        if file_path:
+                            inputs.itemById('bladePath').value = file_path
+                            append_status(inputs, f'Blade file selected: {os.path.basename(file_path)}')
+                        changed.value = False
+
+                    elif changed.id == 'profilePath':
+                        profile_path = changed.value.strip()
+                        if profile_path:
+                            append_status(inputs, f'Airfoil path set to: {profile_path}')
+
+                except Exception as err:
+                    append_status(command.commandInputs, f'Input update failed: {err}')
 
         class YBladeDestroyHandler(adsk.core.CommandEventHandler):
             def __init__(self):
@@ -514,21 +443,44 @@ def run(context):
                     handlers.append(onDestroy)
 
                     inputs = cmd.commandInputs
-                    inputs.addStringValueInput("profileFile", "Airfoil file (.afl)", profileFile)
-                    inputs.addStringValueInput("bladeFile", "Blade file (.bld)", qbladeFile)
-                    inputs.addDistanceValueCommandInput("thickness", "Wall thickness", adsk.core.ValueInput.createByString("2mm"))
-                    inputs.addBoolValueInput("removeHubRadius", "Start blade at Z=0", True, "", True)
-                    inputs.addBoolValueInput("centerMass", "Center by center of mass (X=0, Y=0)", True, "", False)
+
+                    profilePathInput = inputs.addStringValueInput('profilePath', 'Airfoil file (.afl)', defaultProfilePath)
+                    profilePathInput.isReadOnly = False
+                    profileBrowse = inputs.addBoolValueInput('profileBrowse', 'Browse airfoil...', False, '', False)
+                    profileBrowse.isFullWidth = True
+
+                    bladePathInput = inputs.addStringValueInput('bladePath', 'Blade file (.bld)', defaultBladePath)
+                    bladePathInput.isReadOnly = False
+                    bladeBrowse = inputs.addBoolValueInput('bladeBrowse', 'Browse blade file...', False, '', False)
+                    bladeBrowse.isFullWidth = True
+
+                    inputs.addBoolValueInput('removeHubRadius', 'Start blade at Z=0', True, '', True)
+                    inputs.addBoolValueInput('centerMass', 'Center mass to origin', True, '', False)
+
+                    statusBox = inputs.addTextBoxCommandInput('statusLog', 'Status', 'Ready', 6, True)
+                    statusBox.isFullWidth = True
+
+                    onInputChanged = YBladeInputChangedHandler(ui, design, rootComp)
+                    cmd.inputChanged.add(onInputChanged)
+                    handlers.append(onInputChanged)
                 except:
                     if ui:
                         ui.messageBox("Failed:\n{}".format(traceback.format_exc()))
 
         cmdDef = commandDefinitions.itemById("YBlade")
         if not cmdDef:
-            cmdDef = commandDefinitions.addButtonDefinition("YBlade",
-                    "Import QBlade",
-                    "Create a blade.",
-                    "./resources")
+            cmdDef = commandDefinitions.addButtonDefinition(
+                "YBlade",
+                "Import QBlade",
+                "Create a blade.",
+                "./resources"
+            )
+        workspace = ui.workspaces.itemById('FusionSolidEnvironment')
+        if workspace:
+            utilitiesPanel = workspace.toolbarPanels.itemById('SolidScriptsAddinsPanel')
+            if utilitiesPanel and not utilitiesPanel.controls.itemById('YBlade'):
+                control = utilitiesPanel.controls.addCommand(cmdDef)
+                control.isPromoted = True
     
         onCommandCreated = YBladeCreateHandler()
         cmdDef.commandCreated.add(onCommandCreated)
