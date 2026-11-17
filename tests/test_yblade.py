@@ -200,9 +200,11 @@ class SectionGeometry(unittest.TestCase):
 
 
 class FakeInput:
-    def __init__(self, iid, value=None, items=None):
-        self.id, self.value = iid, value
-        self.isEnabled, self.isFullWidth, self.text = True, False, ''
+    def __init__(self, iid, name='', value=None, items=None):
+        self.id, self.name, self.value = iid, name, value
+        self.isEnabled, self.isVisible, self.isFullWidth = True, True, False
+        self.tooltip = self.tooltipDescription = ''
+        self.formattedText = ''
         self.listItems = items
 
     @property
@@ -219,32 +221,36 @@ class FakeList(list):
 
 
 class FakeInputs:
-    def __init__(self):
-        self.items = {}
+    def __init__(self, registry=None):
+        self.items = {} if registry is None else registry
 
-    def _add(self, iid, value=None, items=None):
-        self.items[iid] = FakeInput(iid, value, items)
+    def _add(self, iid, name='', value=None, items=None):
+        assert iid not in self.items, f'duplicate input id {iid}'
+        self.items[iid] = FakeInput(iid, name, value, items)
         return self.items[iid]
 
     def itemById(self, iid):
         return self.items.get(iid)
 
-    def addStringValueInput(self, iid, name, value):
-        return self._add(iid, value)
+    def addGroupCommandInput(self, iid, name):
+        group = self._add(iid, name)
+        group.children = FakeInputs(self.items)     # ids are unique across the dialog
+        group.isExpanded = False
+        return group
 
     def addBoolValueInput(self, iid, name, is_check, res, value):
-        return self._add(iid, value)
+        return self._add(iid, name, value)
 
     def addDropDownCommandInput(self, iid, name, style):
-        return self._add(iid, None, FakeList())
+        return self._add(iid, name, None, FakeList())
 
     def addValueInput(self, iid, name, unit, vi):
         number, u = vi.stringValue.split()
-        return self._add(iid, float(number) * {'mm': 0.1, 'cm': 1.0}[u])
+        return self._add(iid, name, float(number) * {'mm': 0.1, 'cm': 1.0}[u])
 
     def addTextBoxCommandInput(self, iid, name, text, rows, read_only):
-        item = self._add(iid)
-        item.text = text
+        item = self._add(iid, name)
+        item.formattedText, item.numRows = text, rows
         return item
 
 
@@ -253,6 +259,14 @@ class FakeCommand:
         self.commandInputs = FakeInputs()
         self.execute, self.inputChanged = adsk.core.FakeEvent(), adsk.core.FakeEvent()
         self.validateInputs, self.destroy = adsk.core.FakeEvent(), adsk.core.FakeEvent()
+        self.okButtonText = 'OK'
+        self.size = self.min_size = None
+
+    def setDialogInitialSize(self, w, h):
+        self.size = (w, h)
+
+    def setDialogMinimumSize(self, w, h):
+        self.min_size = (w, h)
 
 
 def args(**kw):
@@ -341,7 +355,7 @@ class FusionBuild(unittest.TestCase):
 
 
 class CommandFlow(unittest.TestCase):
-    """The dialog, end to end: run, choose files, OK, close."""
+    """The dialog, end to end: run, choose files, Import, close."""
 
     def setUp(self):
         adsk.core.Application._app = None
@@ -365,7 +379,9 @@ class CommandFlow(unittest.TestCase):
         inp = cmd.commandInputs.itemById(iid)
         inp.value = True
         for h in cmd.inputChanged:
-            h.notify(args(input=inp, inputs=cmd.commandInputs))
+            # Fusion hands over the collection the input sits in -- a group's children
+            h.notify(args(input=inp, inputs=FakeInputs()))
+        self.assertFalse(inp.value)
 
     def valid(self, cmd):
         a = args(inputs=cmd.commandInputs, areInputsValid=None)
@@ -373,16 +389,39 @@ class CommandFlow(unittest.TestCase):
             h.notify(a)
         return a.areInputsValid
 
+    def text(self, cmd, iid):
+        return cmd.commandInputs.itemById(iid).formattedText
+
+    def test_layout(self):
+        cmd = self.open_dialog()
+        self.assertEqual(cmd.okButtonText, 'Import')
+        self.assertEqual(cmd.size, yb.DIALOG_SIZE)
+        items = cmd.commandInputs.items
+        for iid in ('files', 'settings', 'preview'):
+            self.assertTrue(items[iid].isExpanded)
+        # labels short enough for Fusion's label column; the rest is in tooltips
+        for item in items.values():
+            if item.name and not item.isFullWidth and item.id not in ('files', 'settings', 'preview'):
+                self.assertLessEqual(len(item.name), 18, item.name)
+                self.assertTrue(item.tooltip, item.id)
+        for iid in ('bladeFile', 'airfoilFile', 'status', 'bladeBrowse', 'airfoilBrowse'):
+            self.assertTrue(items[iid].isFullWidth, iid)
+        self.assertIn('Choose a blade file', self.text(cmd, 'status'))
+
     def test_qblade_pair(self):
         cmd = self.open_dialog()
         self.assertFalse(self.valid(cmd))
         self.ui.next_files = [BLD_4812, AFL_4812]
         self.click(cmd, 'bladeBrowse')
-        self.assertIn('airfoil', cmd.commandInputs.itemById('status').text)
+        self.assertIn('<b>4812_TSR5_-_3.bld</b>', self.text(cmd, 'bladeFile'))
+        self.assertIn('in folder 4812_TSR5', self.text(cmd, 'bladeFile'))
+        self.assertIn('airfoil', self.text(cmd, 'status'))
         self.assertFalse(self.valid(cmd))
         self.click(cmd, 'airfoilBrowse')
-        status = cmd.commandInputs.itemById('status').text
-        self.assertTrue(status.startswith('Ready'), status)
+        self.assertIn('NACA 4812.afl', self.text(cmd, 'airfoilFile'))
+        status = self.text(cmd, 'status')
+        self.assertTrue(status.startswith('<b>Ready to import'), status)
+        self.assertIn('&bull;', status)
         self.assertTrue(self.valid(cmd))
 
         for h in cmd.execute:
@@ -401,11 +440,15 @@ class CommandFlow(unittest.TestCase):
         cmd = self.open_dialog()
         self.ui.next_files = [JSON_EXAMPLE]
         self.click(cmd, 'bladeBrowse')
-        self.assertFalse(cmd.commandInputs.itemById('airfoilPath').isEnabled)
+        self.assertFalse(cmd.commandInputs.itemById('airfoilBrowse').isVisible)
+        self.assertFalse(cmd.commandInputs.itemById('airfoilFile').isVisible)
         self.assertTrue(self.valid(cmd))
         for h in cmd.execute:
             h.notify(args(command=cmd))
         self.assertIn('created', self.ui.messages[-1][1])
+
+    def test_file_names_are_escaped(self):
+        self.assertNotIn('<script>', yb._file_html('/tmp/<script>.json', ''))
 
     def test_bad_file_reports_instead_of_crashing(self):
         cmd = self.open_dialog()
@@ -414,12 +457,32 @@ class CommandFlow(unittest.TestCase):
         try:
             self.ui.next_files = [f.name]
             self.click(cmd, 'bladeBrowse')
-            self.assertIn('Problem', cmd.commandInputs.itemById('status').text)
+            self.assertIn('Problem', self.text(cmd, 'status'))
             for h in cmd.execute:
                 h.notify(args(command=cmd))
             self.assertIn('Import failed', self.ui.messages[-1][1])
         finally:
             os.remove(f.name)
+
+    def test_changing_a_setting_updates_the_preview(self):
+        cmd = self.open_dialog()
+        self.ui.next_files = [JSON_EXAMPLE]
+        self.click(cmd, 'bladeBrowse')
+        before = self.text(cmd, 'status')
+        tol = cmd.commandInputs.itemById('tolerance')
+        tol.value = 0.0
+        for h in cmd.inputChanged:
+            h.notify(args(input=tol, inputs=FakeInputs()))
+        self.assertNotEqual(before, self.text(cmd, 'status'))
+        self.assertIn('18 of 18 stations', self.text(cmd, 'status'))
+
+    def test_cancelled_file_dialog_keeps_the_old_file(self):
+        cmd = self.open_dialog()
+        self.ui.next_files = [JSON_EXAMPLE]
+        self.click(cmd, 'bladeBrowse')
+        self.ui.next_files = []          # the user presses Cancel
+        self.click(cmd, 'bladeBrowse')
+        self.assertIn('NACA4812_TSR5.json', self.text(cmd, 'bladeFile'))
 
     def test_no_design_open(self):
         cmd = self.open_dialog()

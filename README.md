@@ -29,8 +29,10 @@ blade with the wrong thickness, this is why:
 - **Your own sketches stay visible.** v2 hid every sketch in the component.
 - **Running it twice is safe.** v2 never ended, so running it again in the same
   Fusion session could attach its handlers twice and reuse a stale airfoil file.
-- **You see what will be built before pressing OK**: number of stations used,
-  blade length, skipped circular root sections and other notes.
+- **A clearer dialog.** File names instead of long paths, short labels with
+  explanations in the tooltips, and a preview of what will be built - number
+  of stations, blade length, skipped circular root sections - before you press
+  Import.
 - **Repeated points, reversed outlines and Lednicer-format airfoil files** are
   handled.
 - **No toolbar button.** A script ends when its dialog closes, so a button it
@@ -57,21 +59,25 @@ v3 uses its own command name, so it can sit next to an older YBlade.
 
 1. Open or create a design.
 2. Run **YBlade** from Scripts and Add-Ins.
-3. **Choose blade file** - a QBlade `.bld` or a combined `.json`.
-4. For a `.bld`: **Choose airfoil file** - the `.afl` the blade uses
+3. **Choose blade file...** - a QBlade `.bld`, or a `.json` from
+   QBlade esay / Vindmølle Designer.
+4. For a `.bld` only: **Choose airfoil file...** - the `.afl` the blade uses
    (QBlade: Airfoil Design -> select the airfoil -> Export).
-5. Check the status box, then press **OK**.
+5. Check *What will be built*, then press **Import**.
 
-### Options
+The dialog shows the name and folder of each chosen file. Hover over a
+setting for an explanation.
 
-| Option | What it does |
+### Settings
+
+| Setting | What it does |
 |---|---|
-| Units in the file | *Auto* reads metres from QBlade files and the `units` field from `.json` files. Choose a unit only if your file is in something else. |
-| Minimum trailing edge | The trailing edge is opened to at least this thickness. 0.5 mm suits a 0.4 mm nozzle. |
-| Station tolerance | A station is left out when the blade would move less than this without it. 0 keeps every station. |
-| Start blade at Z = 0 | Moves the blade so its root is at Z = 0. Untick it to keep the blade at its real radius from the rotor centre. |
-| Centre of mass on the Z axis | Moves the finished blade so its centre of mass is on the Z axis and the root at Z = 0. |
-| Sketch leading and trailing edge | Draws the leading edge (solid) and the trailing edge (dashed) as splines, handy for modelling a tip or a root fitting. |
+| Trailing edge | The trailing edge is opened to at least this thickness. A sharp edge cannot be lofted or printed; 0.5 mm suits a 0.4 mm nozzle. |
+| Tolerance | A station is left out when the blade would move less than this without it. 0 keeps every station. |
+| Units | *Auto* reads metres from QBlade files and the `units` field from `.json` files. Choose a unit only if your file uses something else. |
+| Root at Z = 0 | Moves the blade so its root is at Z = 0. Untick it to keep the blade at its real distance from the rotor centre. |
+| Centre mass on Z | Moves the finished blade so its centre of mass is on the Z axis and the root at Z = 0. |
+| Edge sketches | Draws the leading edge (solid) and the trailing edge (dashed) as splines, handy for modelling a tip or a root fitting. |
 
 ### Result and orientation
 
@@ -83,7 +89,7 @@ plane per station (hidden) - all in one timeline group.
 - The rotor axis is parallel to **Y**; the wind comes from the **-Y** side.
   The flatter (pressure) side of the blade faces the wind.
 
-To build a rotor, untick *Start blade at Z = 0* so the blade keeps its real
+To build a rotor, untick *Root at Z = 0* so the blade keeps its real
 radius, then make a circular pattern of the body around the Y axis (3 copies
 for a 3-bladed rotor). Never mirror a blade - that turns the airfoil upside
 down.
@@ -124,8 +130,8 @@ An example is in `bladeExample/Combined json/`.
 
 ## Troubleshooting
 
-**"Fusion could not loft through the stations".** Try a larger *Minimum
-trailing edge* (e.g. 0.8 mm) or a larger *Station tolerance*. Very thin, very
+**"Fusion could not loft through the stations".** Try a larger *Trailing
+edge* (e.g. 0.8 mm) or a larger *Tolerance*. Very thin, very
 twisted sections near the tip are the usual cause.
 
 **"gave 0 closed regions" / "fewer than five distinct points".** The airfoil

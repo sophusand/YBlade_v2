@@ -16,6 +16,7 @@ above the "Fusion" line does not touch the Fusion API, so it can be tested
 outside Fusion (see tests/).
 """
 
+import html
 import json
 import math
 import os
@@ -417,7 +418,7 @@ def edge_points(outline):
 
 
 def describe(plan, te_gap_cm):
-    lines = [f'{plan.used} of {plan.total} stations used (the rest lie within the station tolerance).',
+    lines = [f'{plan.used} of {plan.total} stations used (the rest lie within the tolerance).',
              f'Blade length {(plan.zs[-1] - plan.zs[0]) * 10:.1f} mm.']
     if plan.opened:
         lines.append(f'Trailing edge opened to {max(te_gap_cm, MIN_TE_GAP_CM) * 10:.2f} mm '
@@ -490,7 +491,7 @@ def build_blade(design, comp, plan, name, guide_rails=False, center_mass=False, 
         loft = lofts.add(loft_in)
     except RuntimeError as err:
         raise RuntimeError(f'Fusion could not loft through the {n} stations:\n{err}\n\n'
-                           f'Try a larger "Minimum trailing edge" or a larger "Station tolerance".')
+                           f'Try a larger "Trailing edge" or a larger "Tolerance" setting.')
     body = loft.bodies.item(0)
     _name(body, name)
 
@@ -535,45 +536,71 @@ def build_blade(design, comp, plan, name, guide_rails=False, center_mass=False, 
 
 
 # ---------------------------------------------------------------------- command UI
+#
+# Fusion gives the labels about a third of the dialog's width and cuts off
+# anything longer, so the labels are short and the explanations sit in the
+# tooltips. File names are shown in text boxes across the full width instead of
+# whole paths in narrow fields.
 
-def _set_status(inputs, lines):
-    box = inputs.itemById('status')
-    if box:
-        box.text = '\n'.join(lines)
+DIALOG_SIZE = (480, 640)
+DIALOG_MIN_SIZE = (420, 520)
+
+_files = {'blade': '', 'airfoil': ''}
+_ui = {}                # the dialog's inputs by id, kept so nothing has to be looked up
 
 
-def _read_inputs(inputs):
-    unit = inputs.itemById('unit').selectedItem.name
+def _esc(text):
+    return html.escape(str(text), quote=False)
+
+
+def _file_html(path, empty):
+    if not path:
+        return f'<i>{_esc(empty)}</i>'
+    folder = os.path.basename(os.path.dirname(path)) or os.path.dirname(path)
+    return f'<b>{_esc(os.path.basename(path))}</b><br>in folder {_esc(folder)}'
+
+
+def _set_status(title, lines=()):
+    body = ''.join(f'<br>&bull; {_esc(line)}' for line in lines)
+    _ui['status'].formattedText = f'<b>{_esc(title)}</b>{body}'
+
+
+def _options():
+    unit = _ui['unit'].selectedItem.name
     return {
-        'blade': inputs.itemById('bladePath').value.strip(),
-        'airfoil': inputs.itemById('airfoilPath').value.strip(),
-        'unit': None if unit.startswith('Auto') else unit,
-        'te_gap': inputs.itemById('teGap').value,          # cm
-        'tolerance': inputs.itemById('tolerance').value,   # cm
-        'start_at_zero': inputs.itemById('startAtZero').value,
-        'center_mass': inputs.itemById('centerMass').value,
-        'guide_rails': inputs.itemById('guideRails').value,
+        'blade': _files['blade'],
+        'airfoil': _files['airfoil'],
+        'unit': None if unit == 'Auto' else unit,
+        'te_gap': _ui['teGap'].value,          # cm
+        'tolerance': _ui['tolerance'].value,   # cm
+        'start_at_zero': _ui['startAtZero'].value,
+        'center_mass': _ui['centerMass'].value,
+        'guide_rails': _ui['guideRails'].value,
     }
 
 
-def _preview(inputs):
-    """Read the chosen files and say what will be built, before OK is pressed."""
-    o = _read_inputs(inputs)
+def _refresh():
+    """Show the chosen files and what will be built, before Import is pressed."""
+    o = _options()
     is_json = o['blade'].lower().endswith('.json')
-    inputs.itemById('airfoilPath').isEnabled = not is_json
-    inputs.itemById('airfoilBrowse').isEnabled = not is_json
+    _ui['bladeFile'].formattedText = _file_html(o['blade'], 'No blade file chosen yet.')
+    _ui['airfoilFile'].formattedText = _file_html(o['airfoil'], 'No airfoil file chosen yet.')
+    for iid in ('airfoilBrowse', 'airfoilFile'):
+        _ui[iid].isVisible = not is_json        # a .json carries its own airfoil
     if not o['blade']:
-        _set_status(inputs, ['Choose a blade file (.bld) or a combined file (.json).'])
+        _set_status('Choose a blade file.',
+                    ['QBlade: the blade (.bld), then its airfoil (.afl).',
+                     'QBlade esay / Vindmølle Designer: the .json export alone.'])
         return
     if not is_json and not o['airfoil']:
-        _set_status(inputs, ['Now choose the airfoil file (.afl) the blade uses.'])
+        _set_status('Now choose the airfoil file (.afl) the blade uses.')
         return
     try:
         blade = load_blade(o['blade'], o['airfoil'], o['unit'])
         plan = plan_blade(blade, o['te_gap'], o['tolerance'], o['start_at_zero'])
-        _set_status(inputs, [f'Ready: {blade.name}'] + describe(plan, o['te_gap']))
+        _set_status(f'Ready to import "{blade.name}"', describe(plan, o['te_gap']))
     except Exception as err:
-        _set_status(inputs, [f'Problem: {err}'])
+        _set_status('Problem with the file:', [str(err)])
 
 
 def _browse(ui, title, file_filter):
@@ -601,7 +628,7 @@ class ExecuteHandler(adsk.core.CommandEventHandler):
             design = adsk.fusion.Design.cast(app.activeProduct)
             if not design:
                 raise RuntimeError('Open a design (the Design workspace) first.')
-            o = _read_inputs(args.command.commandInputs)
+            o = _options()
             dialog = ui.createProgressDialog()
             dialog.isCancelButtonShown = False
             dialog.show('YBlade', 'Reading the files...', 0, 10)
@@ -611,8 +638,9 @@ class ExecuteHandler(adsk.core.CommandEventHandler):
                                       o['guide_rails'], o['center_mass'], dialog)
             dialog.hide()
             dialog = None
-            ui.messageBox('\n'.join([f'Blade "{body.name}" created.'] + describe(plan, o['te_gap'])
-                                    + extra), 'YBlade v' + VERSION)
+            ui.messageBox('\n'.join([f'Blade "{body.name}" created.', '']
+                                    + ['- ' + line for line in describe(plan, o['te_gap']) + extra]),
+                          'YBlade v' + VERSION)
         except Exception as err:
             if dialog:
                 dialog.hide()
@@ -623,37 +651,42 @@ class InputChangedHandler(adsk.core.InputChangedEventHandler):
     def notify(self, args):
         ui = adsk.core.Application.get().userInterface
         try:
-            changed, inputs = args.input, args.inputs
-            if changed.id == 'status':
+            changed = args.input
+            if changed.id in ('status', 'bladeFile', 'airfoilFile'):
                 return
-            if changed.id in ('bladeBrowse', 'airfoilBrowse'):
+            if changed.id == 'bladeBrowse':
                 changed.value = False   # a button: reset it, whatever Fusion set it to
-                if changed.id == 'bladeBrowse':
-                    path = _browse(ui, 'Blade file (.bld) or combined file (.json)',
-                                   'Blade files (*.bld *.json);;All files (*.*)')
-                    if path:
-                        inputs.itemById('bladePath').value = path
-                else:
-                    path = _browse(ui, 'Airfoil file (.afl)',
-                                   'Airfoil files (*.afl *.dat *.txt);;All files (*.*)')
-                    if path:
-                        inputs.itemById('airfoilPath').value = path
-            _preview(inputs)
+                path = _browse(ui, 'Blade file (.bld or .json)',
+                               'Blade files (*.bld *.json);;All files (*.*)')
+                if path:
+                    _files['blade'] = path
+            elif changed.id == 'airfoilBrowse':
+                changed.value = False
+                path = _browse(ui, 'Airfoil file (.afl)',
+                               'Airfoil files (*.afl *.dat *.txt);;All files (*.*)')
+                if path:
+                    _files['airfoil'] = path
+            _refresh()
         except Exception:
             ui.messageBox(traceback.format_exc(), 'YBlade v' + VERSION)
 
 
 class ValidateHandler(adsk.core.ValidateInputsEventHandler):
     def notify(self, args):
-        inputs = args.inputs
-        blade = inputs.itemById('bladePath').value.strip()
-        airfoil = inputs.itemById('airfoilPath').value.strip()
-        args.areInputsValid = bool(blade) and (blade.lower().endswith('.json') or bool(airfoil))
+        blade = _files['blade']
+        args.areInputsValid = bool(blade) and (blade.lower().endswith('.json') or bool(_files['airfoil']))
 
 
 class DestroyHandler(adsk.core.CommandEventHandler):
     def notify(self, args):
         adsk.terminate()            # the script set autoTerminate(False), so it ends itself here
+
+
+def _tip(item, short, long=''):
+    item.tooltip = short
+    if long:
+        item.tooltipDescription = long
+    return item
 
 
 class CreatedHandler(adsk.core.CommandCreatedEventHandler):
@@ -668,31 +701,79 @@ class CreatedHandler(adsk.core.CommandCreatedEventHandler):
                 event.add(handler)
                 handlers.append(handler)
 
+            cmd.okButtonText = 'Import'
+            try:
+                cmd.setDialogInitialSize(*DIALOG_SIZE)
+                cmd.setDialogMinimumSize(*DIALOG_MIN_SIZE)
+            except Exception:
+                pass                # older Fusion: default size
+
+            _files.update(blade='', airfoil='')
+            _ui.clear()
             inputs = cmd.commandInputs
-            inputs.addStringValueInput('bladePath', 'Blade file', '')
-            inputs.addBoolValueInput('bladeBrowse', 'Choose blade file (.bld or .json)...',
-                                     False, '', False).isFullWidth = True
-            inputs.addStringValueInput('airfoilPath', 'Airfoil file', '')
-            inputs.addBoolValueInput('airfoilBrowse', 'Choose airfoil file (.afl)...',
-                                     False, '', False).isFullWidth = True
 
-            units = inputs.addDropDownCommandInput('unit', 'Units in the file',
-                                                   adsk.core.DropDownStyles.TextListDropDownStyle)
-            for label, selected in (('Auto (QBlade: meter, .json: as stated)', True),
-                                    ('Meter', False), ('Decimeter', False),
-                                    ('Centimeter', False), ('Millimeter', False)):
-                units.listItems.add(label, selected)
+            def keep(item):
+                _ui[item.id] = item
+                return item
 
-            inputs.addValueInput('teGap', 'Minimum trailing edge', 'mm',
-                                 adsk.core.ValueInput.createByString('0.5 mm'))
-            inputs.addValueInput('tolerance', 'Station tolerance', 'mm',
-                                 adsk.core.ValueInput.createByString('0.05 mm'))
-            inputs.addBoolValueInput('startAtZero', 'Start blade at Z = 0', True, '', True)
-            inputs.addBoolValueInput('centerMass', 'Centre of mass on the Z axis', True, '', False)
-            inputs.addBoolValueInput('guideRails', 'Sketch leading and trailing edge', True, '', False)
-            inputs.addTextBoxCommandInput('status', 'Status',
-                                          'Choose a blade file (.bld) or a combined file (.json).',
-                                          7, True).isFullWidth = True
+            def text_box(parent, iid, rows):
+                box = keep(parent.addTextBoxCommandInput(iid, '', '', rows, True))
+                box.isFullWidth = True
+                return box
+
+            def button(parent, iid, label, tip, long):
+                btn = keep(parent.addBoolValueInput(iid, label, False, '', False))
+                btn.isFullWidth = True
+                return _tip(btn, tip, long)
+
+            files = inputs.addGroupCommandInput('files', 'Files')
+            files.isExpanded = True
+            f = files.children
+            button(f, 'bladeBrowse', 'Choose blade file...', 'Blade file',
+                   'A QBlade blade file (.bld), or a .json exported by QBlade esay / '
+                   'Vindmølle Designer (which also holds the airfoil).')
+            text_box(f, 'bladeFile', 2)
+            button(f, 'airfoilBrowse', 'Choose airfoil file...', 'Airfoil file',
+                   'The airfoil (.afl) the QBlade blade uses. QBlade: Airfoil Design, '
+                   'select the airfoil, Export. Not needed for a .json file.')
+            text_box(f, 'airfoilFile', 2)
+
+            settings = inputs.addGroupCommandInput('settings', 'Settings')
+            settings.isExpanded = True
+            s = settings.children
+            _tip(keep(s.addValueInput('teGap', 'Trailing edge', 'mm',
+                                      adsk.core.ValueInput.createByString('0.5 mm'))),
+                 'Minimum trailing edge thickness',
+                 'The trailing edge is opened to at least this thickness. A sharp edge '
+                 'cannot be lofted or printed; 0.5 mm suits a 0.4 mm nozzle.')
+            _tip(keep(s.addValueInput('tolerance', 'Tolerance', 'mm',
+                                      adsk.core.ValueInput.createByString('0.05 mm'))),
+                 'Station tolerance',
+                 'A station is left out when the blade would move less than this without it. '
+                 '0 keeps every station.')
+            unit = keep(s.addDropDownCommandInput('unit', 'Units',
+                                                  adsk.core.DropDownStyles.TextListDropDownStyle))
+            for label in ('Auto', 'Meter', 'Decimeter', 'Centimeter', 'Millimeter'):
+                unit.listItems.add(label, label == 'Auto')
+            _tip(unit, 'Units in the file',
+                 'Auto: metres for QBlade files, the "units" field for .json files. '
+                 'Choose a unit only if your file uses something else.')
+            _tip(keep(s.addBoolValueInput('startAtZero', 'Root at Z = 0', True, '', True)),
+                 'Start the blade at Z = 0',
+                 'Untick to keep the blade at its real distance from the rotor centre, '
+                 'e.g. to pattern three blades around the Y axis.')
+            _tip(keep(s.addBoolValueInput('centerMass', 'Centre mass on Z', True, '', False)),
+                 'Centre of mass on the Z axis',
+                 'Moves the finished blade so its centre of mass is on the Z axis and the root at Z = 0.')
+            _tip(keep(s.addBoolValueInput('guideRails', 'Edge sketches', True, '', False)),
+                 'Sketch the leading and trailing edge',
+                 'Draws the leading edge (solid) and the trailing edge (dashed) as splines, '
+                 'handy for modelling a tip or a root fitting.')
+
+            preview = inputs.addGroupCommandInput('preview', 'What will be built')
+            preview.isExpanded = True
+            text_box(preview.children, 'status', 8)
+            _refresh()
         except Exception:
             ui.messageBox(traceback.format_exc(), 'YBlade v' + VERSION)
 
