@@ -1,115 +1,182 @@
-# YBlade - Import QBlade blades into Fusion 360
+# YBlade v3 - import wind turbine blades into Fusion 360
 
-Script for Fusion 360 that imports [QBlade](https://www.q-blade.org/) blade designs and
-constructs them as solid 3D bodies:
+A Fusion 360 script that turns a wind turbine blade design into one solid body.
+It reads a [QBlade](https://www.q-blade.org/) blade file with its airfoil, or a
+single combined `.json` file, and lofts a smooth blade through every station.
 
 ![Blade Import Demo](Blade%20importing.gif)
 
-## ✨ Features
+## What's new in v3
 
-- Imports QBlade blade designs directly into Fusion 360 as a single clean solid body
-- Automatically detects and uses the dominant airfoil profile in multi-profile blades
-- Optional **Start blade at Z=0** toggle removes the hub offset before modelling
-- Optional **Center mass to origin** toggle repositions the resulting body using its center of mass
-- Built-in status log keeps you updated on every step of the import
-- Adds a toolbar button (Solid workspace → Add-Ins panel) for one-click access with a custom icon
+v3 is mostly fixes. If v2 gave you a bumpy leading edge, a failed loft or a
+blade with the wrong thickness, this is why:
 
-## 📋 Supported QBlade Versions
+- **Real loft instead of a sweep.** v2 swept the first section along a guide
+  rail, which only approximates the chord and twist between stations and left
+  a wavy leading edge. v3 draws every station and lofts through all of them.
+- **Sharp trailing edges work.** QBlade airfoil files start and end on the same
+  point, so the line that closes the outline has zero length, and a loft
+  through such outlines fails (`ASM_BAD_UV_SKIN_DIR` and similar). v3 opens the trailing edge to a
+  minimum thickness you choose (0.5 mm by default), which is also what a
+  3D printer can actually make.
+- **Stations are no longer thrown away.** v2 skipped a station if its chord
+  changed less than 1 cm and its twist less than 1°, which on a small blade
+  removed most of them. v3 leaves a station out only if the blade would move
+  less than a set tolerance (0.05 mm by default) without it.
+- **Section shape can change along the blade.** In the combined `.json` format
+  every station may carry its own outline, e.g. thick at the root and thin at
+  the tip.
+- **Your own sketches stay visible.** v2 hid every sketch in the component.
+- **Running it twice is safe.** v2 never ended, so running it again in the same
+  Fusion session could attach its handlers twice and reuse a stale airfoil file.
+- **You see what will be built before pressing OK**: number of stations used,
+  blade length, skipped circular root sections and other notes.
+- **Repeated points, reversed outlines and Lednicer-format airfoil files** are
+  handled.
+- **No toolbar button.** A script ends when its dialog closes, so a button it
+  leaves behind stops working. Run YBlade from Scripts and Add-Ins.
 
-This script supports both:
-- **QBlade CE v2.x** (2025) - New `.bld` format with extended parameters
-- **QBlade v0.963** (2021) - Old text format
+The way sections are placed is unchanged from v2: a QBlade blade that imported
+fine before comes out in the same place, to within a fraction of a millimetre.
 
-## 🚀 Installation
+## Installation
 
-### Method 1: Direct Install (Recommended)
-1. Download or clone this repository
-2. Copy the entire `YBlade_v2` folder to your Fusion 360 scripts directory:
-   - **Windows**: `%appdata%\Autodesk\Autodesk Fusion 360\API\Scripts`
-   - **macOS**: `~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/Scripts`
-3. Restart Fusion 360
+1. Download this repository (Code -> Download ZIP) and unzip it, or clone it.
+2. In Fusion 360: **Utilities -> Add-Ins -> Scripts and Add-Ins**.
+3. Next to "My Scripts" press **+** and choose the downloaded folder.
+4. **YBlade** appears in the list.
 
-### Method 2: Manual Install
-1. In Fusion 360, go to **Tools & Utilities** → **Add-Ins** → **Scripts and Add-Ins**
-2. Click the **"+"** button next to "My Scripts"
-3. Select the `YBlade_v2` folder
-4. The script should now appear in the list
+You can also copy the folder into Fusion's script folder:
 
-## 📖 Usage
+- **Windows:** `%appdata%\Autodesk\Autodesk Fusion 360\API\Scripts`
+- **macOS:** `~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/Scripts`
 
-### Step 1: Prepare QBlade Files
+v3 uses its own command name, so it can sit next to an older YBlade.
 
-In QBlade, you need to export two files:
+## Usage
 
-1. **Blade Definition File** (`.bld` or `.txt`)
-   - In QBlade v2.x: File → Export Blade → Save as `.bld`
-   - Contains: positions, chord lengths, twist angles, etc.
+1. Open or create a design.
+2. Run **YBlade** from Scripts and Add-Ins.
+3. **Choose blade file** - a QBlade `.bld` or a combined `.json`.
+4. For a `.bld`: **Choose airfoil file** - the `.afl` the blade uses
+   (QBlade: Airfoil Design -> select the airfoil -> Export).
+5. Check the status box, then press **OK**.
 
-2. **Airfoil Profile File** (`.afl` or `.txt`)
-   - In QBlade: Airfoils → Select your profile → Export
-   - Contains: X-Y coordinates of the airfoil shape
+### Options
 
-**Important**: Make sure you export the profile that is used most in your blade design.
+| Option | What it does |
+|---|---|
+| Units in the file | *Auto* reads metres from QBlade files and the `units` field from `.json` files. Choose a unit only if your file is in something else. |
+| Minimum trailing edge | The trailing edge is opened to at least this thickness. 0.5 mm suits a 0.4 mm nozzle. |
+| Station tolerance | A station is left out when the blade would move less than this without it. 0 keeps every station. |
+| Start blade at Z = 0 | Moves the blade so its root is at Z = 0. Untick it to keep the blade at its real radius from the rotor centre. |
+| Centre of mass on the Z axis | Moves the finished blade so its centre of mass is on the Z axis and the root at Z = 0. |
+| Sketch leading and trailing edge | Draws the leading edge (solid) and the trailing edge (dashed) as splines, handy for modelling a tip or a root fitting. |
 
-### Step 2: Run Script in Fusion 360
+### Result and orientation
 
-1. Open Fusion 360 and create or open a design
-2. Go to **Tools & Utilities** → **Add-Ins** → **Scripts and Add-Ins**
-3. Under **Scripts** tab, find **YBlade** in the list
-4. Select it and click **Run**
-5. A dialog will appear - click **OK**
-6. Select your **blade definition file** (`.bld` or `.txt`)
-7. Select your **airfoil profile file** (`.afl` or `.txt`)
-8. Optionally toggle:
-   - **Start blade at Z=0** to subtract the hub radius so the blade begins at Z = 0 cm
-   - **Center mass to origin** to move the finished body so its COM sits at (0,0,0) and the root touches Z = 0
-9. Click **OK** and watch the status log for progress updates while the solid is generated
+You get one solid body, named after the file, plus one sketch and construction
+plane per station (hidden) - all in one timeline group.
 
-### Step 3: Result
+- The blade runs along **+Z**, root to tip.
+- The sections lie in XY planes, stacked on the pitch axis.
+- The rotor axis is parallel to **Y**; the wind comes from the **-Y** side.
+  The flatter (pressure) side of the blade faces the wind.
 
-One solid body will be created, following the blade's sweep path and twist profile. You can continue modelling, add mounting hardware, or export it straight to CAM.
+To build a rotor, untick *Start blade at Z = 0* so the blade keeps its real
+radius, then make a circular pattern of the body around the Y axis (3 copies
+for a 3-bladed rotor). Never mirror a blade - that turns the airfoil upside
+down.
 
-## 📁 Example Files
+## The combined .json format
 
-See the `bladeExample` folder for sample input files that work with this script.
+One file holds the stations and the section outline. Fysik Klubben's
+Vindmølle Designer exports it, and it is easy to write from a spreadsheet or a
+script.
 
-## 🔧 Troubleshooting
+```json
+{
+  "meta":    { "name": "My blade", "units": "Meter" },
+  "airfoil": { "name": "NACA 4812", "coordinates": [[1.0, 0.0], [0.98, 0.01], "..."] },
+  "blade": [
+    { "pos": 0.0916, "chord": 0.0733, "twist": 19.15, "p_axis": 0.296 },
+    { "pos": 0.1074, "chord": 0.0678, "twist": 16.26, "p_axis": 0.296 },
+    { "pos": 0.36,   "chord": 0.0257, "twist": 1.24,  "p_axis": 0.296,
+      "points": [[1.0, 0.0], "..."] }
+  ]
+}
+```
 
-### "Multiple profiles detected" 
-- **Solution**: The script automatically uses the most common profile. Make sure you select the corresponding `.afl` file.
+| Field | Meaning |
+|---|---|
+| `meta.units` | `Meter`, `Decimeter`, `Centimeter` or `Millimeter` (default `Meter`). Applies to `pos` and `chord`. |
+| `airfoil.coordinates` | The section outline for chord 1, Selig order: trailing edge -> top -> nose -> bottom -> trailing edge. |
+| `blade[].pos` | Distance from the rotor centre. |
+| `blade[].chord` | Chord length. |
+| `blade[].twist` | Twist in degrees. |
+| `blade[].p_axis` | Pitch axis as a fraction of the chord from the nose (default 0.25). |
+| `blade[].points` | Optional: this station's own outline, same format as `airfoil.coordinates`. Use the same number of points at every station so the loft can match them up. |
 
-### Blade looks deformed at the root
-- **Cause**: Your blade uses circular profiles at the root that differ from the main airfoil
-- **Solution**: The script now automatically filters out circular root sections. Use the main airfoil `.afl` file.
+`airfoil` may be left out if every station has `points`. `offset_x` and
+`offset_y` are read but ignored - see Known limitations.
 
-### "Guide rails do not intersect"
-- **Cause**: Complex blade geometry with extreme twists
-- **Solution**: The script now uses simplified loft without guide rails for better reliability
+An example is in `bladeExample/Combined json/`.
 
-### Script fails to run
-- Check that both files are valid QBlade exports
-- Ensure the profile file matches the airfoil used in the blade
-- Try increasing the "Infill simplification factor" for complex geometries
+## Troubleshooting
 
-## ⚠️ Known Limitations
+**"Fusion could not loft through the stations".** Try a larger *Minimum
+trailing edge* (e.g. 0.8 mm) or a larger *Station tolerance*. Very thin, very
+twisted sections near the tip are the usual cause.
 
-- **Multi-profile blades**: Sections using different airfoils will have their geometry preserved (position, twist, chord), but all will use the same airfoil shape (the most common one)
-- **Circular root sections**: Automatically filtered out to maintain consistency
-- **Very complex geometries**: May require manual adjustment of simplification parameters
+**"gave 0 closed regions" / "fewer than five distinct points".** The airfoil
+file is not a single outline. Open it in a text editor: it should be one list of
+x y pairs, or Lednicer format with the point counts on the second line.
 
-## 📝 Tips for Best Results
+**The blade starts later than in QBlade.** Circular root sections are left out
+on purpose - model the root fitting yourself. The status box says how many were
+skipped.
 
-1. **Design with single airfoil**: For most accurate results, use one airfoil profile throughout your blade in QBlade
-2. **Avoid extreme twists**: Very high twist angles (>60°) near transitions may cause issues
-3. **Check your exports**: Verify files open correctly in a text editor before importing
-4. **Start simple**: Test with example files first to understand the workflow
+**The blade looks thicker or thinner than expected.** In QBlade files every
+station uses the airfoil file you chose. If your blade uses several airfoils,
+use the combined `.json` format with `points` per station.
 
-## 📦 Recent Updates
+## Known limitations
 
-- **2025-12-01**: Solid-only workflow, status logging, toolbar button, hub-offset removal, center-of-mass positioning. Removed preview sketch option due to reliability issues in Fusion.
+- **One airfoil for QBlade files.** QBlade blade files name polar files, not
+  airfoil files, so YBlade cannot look the airfoils up. Every station gets the
+  shape from the `.afl` you choose.
+- **Offsets are ignored.** QBlade's OFFSET_X / OFFSET_Y (sweep and prebend) are
+  not applied; every section is stacked on its pitch axis. The status box warns
+  when a file has offsets.
+- **Circular root sections are skipped**, see above.
 
-## 🙏 Credits
+## For developers
 
-Original script by Jan Mrázek (2021)  
-Updated for QBlade CE v2.x compatibility (2025)  
-Fixes and improvements by [Fysik Klubben](https://www.instagram.com/fysik_klubben/)
+The file reading and the geometry do not use the Fusion API and are tested
+without Fusion, against a small stand-in for the API in `tests/fake_adsk`:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+The tests also check that v3 places the sections where v2 did, and that no
+left-out station lies further than the tolerance from the blade.
+
+## Changelog
+
+- **3.0.0 (2026-11)** - Loft through all stations instead of a guided sweep;
+  trailing edge opened to a minimum thickness; tolerance-based station thinning;
+  per-station outlines in the `.json` format; preview in the dialog; only the
+  script's own sketches are hidden; the script ends cleanly; works in direct
+  modelling designs; tests.
+- **2.x (2025-12)** - Solid-only workflow, status log, toolbar button,
+  hub-offset removal, centre-of-mass positioning, QBlade CE 2.x files.
+- **1.x (2019-2021)** - Original script by Jan Mrázek.
+
+## Credits
+
+Original script by Jan Mrázek ([yaqwsx](https://github.com/yaqwsx)), 2019-2021.
+QBlade CE 2.x support, v2 and v3 by sophusand and
+[Fysik Klubben](https://www.instagram.com/fysik_klubben/).
+
+MIT licence - see `LICENSE`.

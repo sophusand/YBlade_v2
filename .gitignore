@@ -19,3 +19,7 @@ __pycache__/
 *.tmp
 *.bak
 *~
+
+# Virtual environments
+.venv/
+venv/

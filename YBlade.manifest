@@ -1,10 +1,11 @@
 {
-	"autodeskProduct":	"Fusion360",
-	"type":	"script",
-	"author":	"Jan Mrázek, Updated by sophusand",
-	"description":	{
-		"":	"Import QBlade wind turbine blade designs into Fusion 360. Supports both QBlade v0.963 and CE v2.x formats. Generates solid bodies ready for manufacturing."
+	"autodeskProduct": "Fusion360",
+	"type": "script",
+	"author": "Jan Mrázek, updated by sophusand / Fysik Klubben",
+	"description": {
+		"": "YBlade v3: import a wind turbine blade (QBlade .bld + .afl, or one combined .json) into Fusion 360 as a single solid body."
 	},
-	"supportedOS":	"windows|mac",
-	"editEnabled":	true
+	"version": "3.0.0",
+	"supportedOS": "windows|mac",
+	"editEnabled": true
 }
